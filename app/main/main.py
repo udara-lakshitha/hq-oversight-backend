@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.main.database import engine, Base
 from app.main.routers import students
+from app.main.routers import auth
 
 # Generate the physical SQLite database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -24,6 +25,7 @@ app.add_middleware(
 
 # Include the core functional sub-system routers
 app.include_router(students.router)
+app.include_router(auth.router)
 
 @app.get("/")
 def root_status_check():

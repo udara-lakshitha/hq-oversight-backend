@@ -2,6 +2,7 @@
 venv/
 ENV/
 env/
+.env
 .venv/
 
 # Python Bytecode / Compiled Files

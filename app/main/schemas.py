@@ -17,3 +17,16 @@ class StudentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class VerifyOTPRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    student: StudentResponse
