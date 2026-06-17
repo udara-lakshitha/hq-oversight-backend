@@ -1,0 +1,33 @@
+# Local Python Virtual Environments
+venv/
+ENV/
+env/
+.venv/
+
+# Python Bytecode / Compiled Files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Databases (Crucial: Prevents tracking production/test student entries)
+*.db
+*.sqlite3
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment Variable & Secret Configuration Files
+.env
+.env.*
+secrets.json
+
+# IDE / Editor Configurations (Optional but recommended for team safety)
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
