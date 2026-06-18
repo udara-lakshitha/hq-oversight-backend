@@ -1,8 +1,10 @@
 import os
 import resend
+from dotenv import load_dotenv
 
-# TODO: get the key using .env file
-RESEND_API_KEY = ""
+load_dotenv()
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 def send_verification_email(student_name: str, target_email: str, otp_code: str):
     """
@@ -10,7 +12,6 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
     via Resend's API framework. Falls back cleanly to terminal logging during dev.
     """
     
-    # Beautiful, modern responsive CSS layout built for student mobile devices
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -33,7 +34,6 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
                     <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #475569;">
                         You initiated a secure access request to sign into your account space. Use the temporary cryptographic passcode grid below to complete your system compilation check:
                     </p>
-                    
                     <table align="center" border="0" cellpadding="0" cellspacing="0" style="margin: 28px auto;">
                         <tr>
                             <td style="background-color: #f1f5f9; border: 2px dashed #cbd5e1; border-radius: 12px; padding: 16px 40px; text-align: center;">
@@ -41,7 +41,6 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
                             </td>
                         </tr>
                     </table>
-                    
                     <p style="margin: 24px 0 0 0; font-size: 12px; line-height: 1.5; color: #64748b; font-style: italic; text-align: center;">
                         ⚠️ This security verification passkey is unique to your session and will automatically self-destruct / expire in exactly 5 minutes.
                     </p>
@@ -57,19 +56,15 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
     </html>
     """
 
-    # If you have an active Resend Key, dispatch over standard production SMTP networks
     if RESEND_API_KEY and RESEND_API_KEY != "re_mock_key_for_local_development":
         try:
             resend.api_key = RESEND_API_KEY
-            
-            # The SDK demands the 'to' parameter be explicitly wrapped as an array/list!
             params = {
                 "from": "HQ-Oversight Engine <onboarding@resend.dev>",
-                "to": [target_email],  
+                "to": [target_email],
                 "subject": f"🔑 {otp_code} is your HQ-Oversight Portal Verification Passkey",
                 "html": html_content
             }
-            
             email_response = resend.Emails.send(params)
             print(f"📧 Production Email successfully routed through Resend API to {target_email}!")
             print(f"📦 Resend Receipt ID: {email_response}")
@@ -78,7 +73,6 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
             print(f"❌ Resend transmission ERROR encountered: {str(e)}")
             print("Falling back to local terminal printout...")
 
-    # 100% FREE DEVELOPMENT FALLBACK: Print layout components directly to your VS Code log console
     print("\n" + "📨 " + "="*65)
     print("📢 PRODUCTION EMAIL SIMULATOR (HTML DESIGN CAPTURED)")
     print(f"TARGET EMAIL : {target_email}")
