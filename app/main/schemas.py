@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+from datetime import datetime
 
 class StudentBase(BaseModel):
     name: str
@@ -11,6 +12,7 @@ class StudentCreate(BaseModel):
     email: EmailStr
     phone_number: str
     password: str
+    profile_pic_path: Optional[str] = None
 
 class StudentResponse(BaseModel):
     id: int
@@ -25,7 +27,7 @@ class StudentResponse(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    device_token: Optional[str] = None
+    device_token: Optional[str] = None  # Optional parameter for bypass tracking
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
@@ -36,3 +38,18 @@ class TokenResponse(BaseModel):
     token_type: str
     device_token: Optional[str] = None
     student: StudentResponse
+
+class MarkCreate(BaseModel):
+    student_id: int
+    paper_number: str
+    marks: float
+
+class MarkResponse(BaseModel):
+    id: int
+    student_id: int
+    paper_number: str
+    marks: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
