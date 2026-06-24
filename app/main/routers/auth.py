@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 import bcrypt
 import random
@@ -11,6 +12,7 @@ from app.main.schemas import LoginRequest, VerifyOTPRequest, TokenResponse
 from app.main.utils import send_verification_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+security_guard = HTTPBearer()
 
 JWT_SECRET = "HQ_OVERSIGHT_SUPER_SECRET_MATHEMATICS_KEY_2026"
 JWT_ALGORITHM = "HS256"
@@ -24,20 +26,31 @@ def generate_jwt_token(email: str) -> str:
     }
     return jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+def get_current_student(credentials: HTTPAuthorizationCredentials = Depends(security_guard), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token properties.")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Session token signature expired or corrupt.")
+        
+    student = db.query(Student).filter(Student.email == email).first()
+    if not student:
+        raise HTTPException(status_code=401, detail="Target student profile missing from registry.")
+    return student
+
 
 @router.post("/login")
 def login_step_one(payload: LoginRequest, db: Session = Depends(get_db)):
-    # 1. Verify student profile registry exists
     student = db.query(Student).filter(Student.email == payload.email).first()
     if not student:
         raise HTTPException(status_code=401, detail="Invalid email or password parameters matched.")
 
-    # 2. Authenticate cryptographic password block signatures
     password_match = bcrypt.checkpw(payload.password.encode('utf-8'), student.hashed_password.encode('utf-8'))
     if not password_match:
         raise HTTPException(status_code=401, detail="Invalid email or password parameters matched.")
 
-    # 3. DEVICE SECURITY BYPASS ROUTING
     if payload.device_token:
         known_device = db.query(StudentDevice).filter(
             StudentDevice.student_id == student.id,

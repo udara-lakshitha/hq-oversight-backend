@@ -27,7 +27,7 @@ class StudentResponse(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    device_token: Optional[str] = None  # Optional parameter for bypass tracking
+    device_token: Optional[str] = None
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
@@ -38,6 +38,23 @@ class TokenResponse(BaseModel):
     token_type: str
     device_token: Optional[str] = None
     student: StudentResponse
+
+class ExamCreate(BaseModel):
+    paper_number: str
+    title: str
+    paper_type: str
+    question_file_path: str
+    marking_scheme_path: Optional[str] = None
+
+class ExamResponse(BaseModel):
+    id: int
+    paper_number: str
+    title: str
+    paper_type: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 class MarkCreate(BaseModel):
     student_id: int

@@ -1,9 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.main.database import engine, Base
-from app.main.routers import students, auth, marks  # NEW: Imported the marks router
+from app.main.routers import students, auth, marks
 
-# Generate physical database tables safely on runtime startup
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="HQ-Oversight Academic Evaluation Engine")

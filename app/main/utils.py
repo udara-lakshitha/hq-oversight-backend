@@ -7,11 +7,6 @@ load_dotenv()
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 def send_verification_email(student_name: str, target_email: str, otp_code: str):
-    """
-    Generates an executive-level responsive HTML email layout and dispatches it 
-    via Resend's API framework. Falls back cleanly to terminal logging during dev.
-    """
-    
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -67,11 +62,9 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
             }
             email_response = resend.Emails.send(params)
             print(f"📧 Production Email successfully routed through Resend API to {target_email}!")
-            print(f"📦 Resend Receipt ID: {email_response}")
             return
         except Exception as e:
             print(f"❌ Resend transmission ERROR encountered: {str(e)}")
-            print("Falling back to local terminal printout...")
 
     print("\n" + "📨 " + "="*65)
     print("📢 PRODUCTION EMAIL SIMULATOR (HTML DESIGN CAPTURED)")

@@ -9,7 +9,6 @@ router = APIRouter(prefix="/students", tags=["Students"])
 
 @router.post("/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 def register_student(student_in: StudentCreate, db: Session = Depends(get_db)):
-    # 1. Check if the email address is already registered
     existing_email = db.query(Student).filter(Student.email == student_in.email).first()
     if existing_email:
         raise HTTPException(
@@ -17,7 +16,6 @@ def register_student(student_in: StudentCreate, db: Session = Depends(get_db)):
             detail="A student profile with this email address already exists."
         )
 
-    # 2. Check if the mobile number is already registered
     existing_phone = db.query(Student).filter(Student.phone_number == student_in.phone_number).first()
     if existing_phone:
         raise HTTPException(
@@ -25,12 +23,10 @@ def register_student(student_in: StudentCreate, db: Session = Depends(get_db)):
             detail="A student profile with this mobile number already exists."
         )
 
-    # 3. Generate a secure salt and hash the password
     salt = bcrypt.gensalt(rounds=12)
     hashed_pw_bytes = bcrypt.hashpw(student_in.password.encode('utf-8'), salt)
     hashed_password_string = hashed_pw_bytes.decode('utf-8')
 
-    # 4. Save the validated profile record to SQLite
     new_student = Student(
         name=student_in.name,
         email=student_in.email,
