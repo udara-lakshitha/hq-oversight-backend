@@ -63,7 +63,7 @@ def get_past_papers(
     current_student: models.Student = Depends(get_current_student)
 ):
     from app.main.routers.exams import get_biweekly_schedule_state
-    is_live, current_hq_num = get_biweekly_schedule_state()
+    is_live, current_hq_num = get_biweekly_schedule_state(db)
     
     max_archived_hq = current_hq_num - 1
     
