@@ -11,121 +11,119 @@ from app.main.routers.auth import get_current_student
 
 router = APIRouter(prefix="/api/exams", tags=["Synchronized Examination Stream"])
 
-DEVELOPMENT_MODE = True  # Toggle True to bypass time window constraints during testing
+DEVELOPMENT_MODE = False
+MOCK_LIVE_MODE = True
 
 UPLOAD_DIR = "./uploads/submissions"
 PAPERS_DIR = "./uploads/question_papers"
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(PAPERS_DIR, exist_ok=True)
+
+def get_biweekly_schedule_state(db: Session):
+    now = datetime.now()
+    current_weekday = now.weekday()
+    current_hour = now.hour
+
+    is_live = False
+    if current_weekday in [1, 4] and (21 <= current_hour <= 23):
+        is_live = True
+
+    latest_exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
+    
+    if latest_exam and latest_exam.paper_number:
+        try:
+            extracted_digits = "".join(filter(str.isdigit, latest_exam.paper_number))
+            max_num = int(extracted_digits) if extracted_digits else 0
+        except ValueError:
+            max_num = 0
+    else:
+        max_num = 0
+
+    if is_live:
+        target_hq_num = max_num if max_num > 0 else 1
+    else:
+        target_hq_num = max_num + 1
+
+    return is_live, target_hq_num
 
 
 @router.get("/live-session", response_model=schemas.ExamResponse)
-def get_active_live_session(db: Session = Depends(get_db)):
-    """
-    Checks if a synchronized exam session stream is open and valid based on timeline parameters.
-    """
-    now = datetime.now()
-    
-    active_exam = db.query(models.Exam).order_by(models.Exam.created_at.desc()).first()
-    if not active_exam:
+def get_active_live_session(
+    db: Session = Depends(get_db),
+    current_student: models.Student = Depends(get_current_student)
+):
+    if MOCK_LIVE_MODE:
+        exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
+        if not exam:
+            raise HTTPException(
+                status_code=404, 
+                detail="Dynamic Live Override active, but your database Exam table is completely empty."
+            )
+        return exam
+
+    is_live, target_hq_num = get_biweekly_schedule_state(db)
+    target_paper_code = f"HQ {target_hq_num}"
+
+    if not is_live and not DEVELOPMENT_MODE:
         raise HTTPException(
             status_code=404, 
-            detail="System locked. No examination streams have been registered yet."
+            detail=f"System locked. {target_paper_code} is scheduled for the upcoming window."
         )
 
-    if DEVELOPMENT_MODE:
-        return active_exam
+    exam = db.query(models.Exam).filter(models.Exam.paper_number == target_paper_code).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Active slot open, but question asset registry profile is blank.")
+        
+    return exam
 
-    is_friday = (now.weekday() == 4)
-    is_in_time_window = (21 <= now.hour <= 23)
 
-    if not (is_friday and is_in_time_window):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"🔒 System locked. Next synchronized live stream open on Friday (9:00 PM - 12:00 AM strictly). Target: {active_exam.paper_number}"
-        )
-
-    return active_exam
+@router.get("/stream-paper/{exam_id}")
+def stream_question_paper_pdf(
+    exam_id: int,
+    db: Session = Depends(get_db),
+    current_student: models.Student = Depends(get_current_student)
+):
+    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+    if not exam or not exam.file_path:
+        raise HTTPException(status_code=404, detail="Requested file record trace missing from asset storage.")
+    
+    absolute_target_path = os.path.abspath(exam.file_path)
+    if not os.path.exists(absolute_target_path):
+        raise HTTPException(status_code=404, detail="Physical PDF binary payload not present on disk array storage units.")
+        
+    return FileResponse(absolute_target_path, media_type="application/pdf", filename=f"Exam_{exam_id}_Questions.pdf")
 
 
 @router.post("/submit-live/{exam_id}")
-def upload_live_answer_sheet(
+async def receive_student_answer_payload(
     exam_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_student: models.Student = Depends(get_current_student)
 ):
-    """
-    Handles live examination file updates into the secure storage workspace disk.
-    """
-    if not DEVELOPMENT_MODE:
-        now = datetime.now()
-        if not (now.weekday() == 4 and 21 <= now.hour <= 23):
-            raise HTTPException(status_code=403, detail="The examination session submission window has closed.")
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Transmission rejected: Document matrix payloads must be strictly in PDF formatting profiles.")
 
-    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Target examination framework metadata not found.")
+    if not os.path.exists(UPLOAD_DIR):
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    file_name = f"live_submission_student_{current_student.id}_exam_{exam_id}_{file.filename}"
-    destination_path = os.path.join(UPLOAD_DIR, file_name)
+    sanitized_filename = f"student_{current_student.id}_exam_{exam_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    destination_file_path = os.path.join(UPLOAD_DIR, sanitized_filename)
 
-    with open(destination_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        with open(destination_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Disk writer configuration failed: {str(err)}")
 
-    submission = db.query(models.ExamSubmission).filter(
-        models.ExamSubmission.student_id == current_student.id,
-        models.ExamSubmission.exam_id == exam_id
-    ).first()
-
-    if submission:
-        submission.submitted_file_path = destination_path
-        db.commit()
-    else:
-        submission = models.ExamSubmission(
-            student_id=current_student.id,
-            exam_id=exam_id,
-            submitted_file_path=destination_path
-        )
-        db.add(submission)
-        db.commit()
-
-    return {
-        "status": "success",
-        "detail": "Live tracking submission received and cached cleanly.",
-        "filename": file_name
-    }
-
-
-@router.get("/stream-paper/{exam_id}")
-def download_question_paper(exam_id: int, db: Session = Depends(get_db)):
-    """
-    Streams a physical PDF question paper resource back to the client interface workspace.
-    Dynamically normalizes filenames to match variations like HQ_07_Questions.pdf or hq7_questions.pdf.
-    """
-    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
-    if not exam or not exam.question_file_path:
-        raise HTTPException(status_code=404, detail="Target examination question profile path database reference not found.")
-    
-    db_filename = os.path.basename(exam.question_file_path)
-    
-    def normalize_string(name: str) -> str:
-        return name.lower().replace(" ", "").replace("_", "").replace("-", "")
-
-    target_normalized = normalize_string(db_filename)
-
-    if os.path.exists(PAPERS_DIR):
-        for actual_file in os.listdir(PAPERS_DIR):
-            if normalize_string(actual_file) == target_normalized:
-                matched_absolute_path = os.path.join(PAPERS_DIR, actual_file)
-                return FileResponse(
-                    matched_absolute_path, 
-                    media_type="application/pdf", 
-                    filename=actual_file
-                )
-                
-    raise HTTPException(
-        status_code=404, 
-        detail=f"Fuzzy Match Failed: No files inside '{PAPERS_DIR}' matched the signature for '{db_filename}'."
+    new_submission = models.Submission(
+        student_id=current_student.id,
+        exam_id=exam_id,
+        file_path=destination_file_path,
+        submitted_at=datetime.now(),
+        status="Pending Evaluation"
     )
+    db.add(new_submission)
+    db.commit()
+    db.refresh(new_submission)
+
+    return {"status": "Success", "message": "Payload verified, saved, and appended onto evaluative structures cleanly."}
