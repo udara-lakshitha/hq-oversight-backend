@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.main.database import engine, Base
-from app.main.routers import students, auth, marks
+from app.main.routers import students, auth, marks, exams
 
 Base.metadata.create_all(bind=engine)
 
@@ -23,6 +23,7 @@ app.add_middleware(
 app.include_router(students.router)
 app.include_router(auth.router)
 app.include_router(marks.router)
+app.include_router(exams.router)
 
 @app.get("/")
 def root_status_check():
