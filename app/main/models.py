@@ -41,6 +41,7 @@ class Exam(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     submissions = relationship("ExamSubmission", back_populates="exam", cascade="all, delete-orphan")
+    marks = relationship("EvaluationMark", back_populates="exam", cascade="all, delete-orphan") # Linked here!
 
 
 class ExamSubmission(Base):
@@ -61,8 +62,9 @@ class EvaluationMark(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
-    paper_number = Column(String, index=True, nullable=False) 
+    exam_id = Column(Integer, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
     marks = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.now)
 
     student = relationship("Student", back_populates="marks")
+    exam = relationship("Exam", back_populates="marks")
