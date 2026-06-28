@@ -1,14 +1,20 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import bcrypt
+
 from app.main.database import get_db
 from app.main.models import Student
 from app.main.schemas import StudentCreate, StudentResponse
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
+BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
+
+
 @router.post("/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 def register_student(student_in: StudentCreate, db: Session = Depends(get_db)):
+    # Verify email uniqueness
     existing_email = db.query(Student).filter(Student.email == student_in.email).first()
     if existing_email:
         raise HTTPException(
@@ -23,7 +29,7 @@ def register_student(student_in: StudentCreate, db: Session = Depends(get_db)):
             detail="A student profile with this mobile number already exists."
         )
 
-    salt = bcrypt.gensalt(rounds=12)
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
     hashed_pw_bytes = bcrypt.hashpw(student_in.password.encode('utf-8'), salt)
     hashed_password_string = hashed_pw_bytes.decode('utf-8')
 
