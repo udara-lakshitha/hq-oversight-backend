@@ -1,11 +1,13 @@
+import os
+import random
+import secrets
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 import bcrypt
-import random
 import jwt
-import secrets
-from datetime import datetime, timedelta, timezone
+
 from app.main.database import get_db
 from app.main.models import Student, StudentDevice
 from app.main.schemas import LoginRequest, VerifyOTPRequest, TokenResponse
@@ -14,8 +16,8 @@ from app.main.utils import send_verification_email
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 security_guard = HTTPBearer()
 
-JWT_SECRET = "HQ_OVERSIGHT_SUPER_SECRET_MATHEMATICS_KEY_2026"
-JWT_ALGORITHM = "HS256"
+JWT_SECRET = os.getenv("JWT_SECRET", "FALLBACK_DEVELOPMENT_KEY_DO_NOT_USE_IN_PROD")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 otp_storage = {}
 
@@ -31,13 +33,13 @@ def get_current_student(credentials: HTTPAuthorizationCredentials = Depends(secu
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token properties.")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token properties.")
     except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Session token signature expired or corrupt.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session token signature expired or corrupt.")
         
     student = db.query(Student).filter(Student.email == email).first()
     if not student:
-        raise HTTPException(status_code=401, detail="Target student profile missing from registry.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Target student profile missing from registry.")
     return student
 
 
@@ -45,11 +47,11 @@ def get_current_student(credentials: HTTPAuthorizationCredentials = Depends(secu
 def login_step_one(payload: LoginRequest, db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.email == payload.email).first()
     if not student:
-        raise HTTPException(status_code=401, detail="Invalid email or password parameters matched.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password parameters matched.")
 
     password_match = bcrypt.checkpw(payload.password.encode('utf-8'), student.hashed_password.encode('utf-8'))
     if not password_match:
-        raise HTTPException(status_code=401, detail="Invalid email or password parameters matched.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password parameters matched.")
 
     if payload.device_token:
         known_device = db.query(StudentDevice).filter(
@@ -96,17 +98,19 @@ def login_step_one(payload: LoginRequest, db: Session = Depends(get_db)):
 def login_step_two(payload: VerifyOTPRequest, db: Session = Depends(get_db)):
     session = otp_storage.get(payload.email)
     if not session:
-        raise HTTPException(status_code=400, detail="Authentication session expired or not initialized.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Authentication session expired or not initialized.")
 
     if datetime.now(timezone.utc) > session["expires_at"]:
         otp_storage.pop(payload.email, None)
-        raise HTTPException(status_code=400, detail="Your verification passkey has expired.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your verification passkey has expired.")
 
     if session["otp"] != payload.otp_code:
-        raise HTTPException(status_code=401, detail="Incorrect security passkey verification failed.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect security passkey verification failed.")
 
     student = db.query(Student).filter(Student.email == payload.email).first()
     otp_storage.pop(payload.email, None)
+
+    db.query(StudentDevice).filter(StudentDevice.student_id == student.id).delete()
 
     new_device_token = secrets.token_hex(32)
     db_device = StudentDevice(student_id=student.id, device_token=new_device_token)
