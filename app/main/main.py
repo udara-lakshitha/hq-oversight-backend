@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.main.database import engine, Base
@@ -7,10 +8,8 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="HQ-Oversight Academic Evaluation Engine")
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
