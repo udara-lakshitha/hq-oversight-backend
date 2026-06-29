@@ -1,6 +1,6 @@
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -15,6 +15,13 @@ DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "False").lower() in ("true", "1
 MOCK_LIVE_MODE = os.getenv("MOCK_LIVE_MODE", "False").lower() in ("true", "1", "yes")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads/submissions")
 PAPERS_DIR = os.getenv("PAPERS_DIR", "./uploads/question_papers")
+
+raw_weekdays = os.getenv("CLASS_WEEKDAYS", "1,4")
+CLASS_WEEKDAYS = [int(d.strip()) for d in raw_weekdays.split(",") if d.strip()]
+START_HOUR = int(os.getenv("START_HOUR", "21"))
+START_MINUTE = int(os.getenv("START_MINUTE", "0"))
+DURATION_HOURS = int(os.getenv("DURATION_HOURS", "3"))
+DURATION_MINUTES = int(os.getenv("DURATION_MINUTES", "10"))
 
 
 def verify_active_device_session(student_id: int, device_token: str, db: Session):
@@ -38,12 +45,18 @@ def verify_active_device_session(student_id: int, device_token: str, db: Session
 
 def get_biweekly_schedule_state(db: Session):
     now = datetime.now()
-    current_weekday = now.weekday()
-    current_hour = now.hour
-
     is_live = False
-    if current_weekday in [1, 4] and (21 <= current_hour <= 23):
-        is_live = True
+
+    for weekday in CLASS_WEEKDAYS:
+        start_datetime = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0)
+        if now.weekday() != weekday:
+            start_datetime -= timedelta(days=1)
+            
+        if start_datetime.weekday() == weekday:
+            end_datetime = start_datetime + timedelta(hours=DURATION_HOURS, minutes=DURATION_MINUTES)
+            if start_datetime <= now <= end_datetime:
+                is_live = True
+                break
 
     latest_exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
     
