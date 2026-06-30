@@ -27,14 +27,15 @@ def get_past_papers(
 ):
     from app.main.routers.exams import get_biweekly_schedule_state
     is_live, current_hq_num = get_biweekly_schedule_state(db)
-    max_archived_hq = current_hq_num - 1
+    
+    max_archived_hq = current_hq_num
     
     all_exams = db.query(models.Exam).all()
     past_exams = []
     
     for exam in all_exams:
         try:
-            num = int(exam.paper_number.replace("HQ", "").strip())
+            num = int(exam.paper_number.upper().replace("HQ", "").strip())
             if num <= max_archived_hq:
                 past_exams.append(exam)
         except ValueError:
@@ -45,6 +46,9 @@ def get_past_papers(
     response_payload = []
     for exam in sorted_exams:
         scheme_exists = os.path.exists(exam.marking_scheme_path) if exam.marking_scheme_path else False
+        
+        feedback_filename = f"feedback_stu_{current_student.id}.pdf"
+        feedback_exists = os.path.exists(os.path.join("./uploads/feedbacks", feedback_filename))
         
         matching_mark = db.query(models.EvaluationMark).filter(
             models.EvaluationMark.student_id == current_student.id,
@@ -57,8 +61,10 @@ def get_past_papers(
             "title": exam.title,
             "paper_type": exam.paper_type,
             "scheme_available": scheme_exists,
+            "feedback_available": feedback_exists,
             "marks": matching_mark.marks if matching_mark else None
         })
+        
     return response_payload
 
 
