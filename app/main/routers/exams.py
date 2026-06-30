@@ -114,8 +114,9 @@ def get_active_live_session(
 
 
 @router.get("/stream-paper/{exam_id}")
-def stream_question_paper_pdf(
+def stream_exam_file_pdf(
     exam_id: int,
+    file_type: str = "paper",
     db: Session = Depends(get_db),
     current_student: models.Student = Depends(get_current_student),
     x_device_token: str = Header(None, alias="X-Device-Token")
@@ -123,20 +124,36 @@ def stream_question_paper_pdf(
     verify_active_device_session(current_student.id, x_device_token, db)
 
     exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
-    if not exam or not exam.question_file_path:
+    if not exam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Requested file record trace missing from asset storage."
+            detail="Requested exam record missing from database storage."
         )
     
-    absolute_target_path = os.path.abspath(exam.question_file_path)
+    if file_type == "scheme":
+        file_path = exam.marking_scheme_path
+        download_name = f"Exam_{exam_id}_Marking_Scheme.pdf"
+    elif file_type == "feedback":
+        file_path = exam.feedback_file_path
+        download_name = f"Exam_{exam_id}_Feedback.pdf"
+    else:
+        file_path = exam.question_file_path
+        download_name = f"Exam_{exam_id}_Questions.pdf"
+
+    if not file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Requested asset file type path [{file_type}] trace missing from database record."
+        )
+        
+    absolute_target_path = os.path.abspath(file_path)
     if not os.path.exists(absolute_target_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Physical PDF binary payload not present on disk array storage units."
         )
         
-    return FileResponse(absolute_target_path, media_type="application/pdf", filename=f"Exam_{exam_id}_Questions.pdf")
+    return FileResponse(absolute_target_path, media_type="application/pdf", filename=download_name)
 
 
 @router.post("/submit-live/{exam_id}")
