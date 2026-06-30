@@ -12,6 +12,7 @@ class Student(Base):
     phone_number = Column(String, nullable=False)
     hashed_password = Column(String, nullable=False)
     profile_pic_path = Column(String, nullable=True)
+    role = Column(String)
 
     devices = relationship("StudentDevice", back_populates="student", cascade="all, delete-orphan")
     marks = relationship("EvaluationMark", back_populates="student", cascade="all, delete-orphan")

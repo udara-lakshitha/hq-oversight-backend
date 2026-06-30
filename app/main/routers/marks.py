@@ -1,5 +1,7 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, status
+import shutil
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -9,54 +11,13 @@ from app.main.routers.auth import get_current_student
 
 router = APIRouter(prefix="/api/marks", tags=["Evaluation Marks Engine"])
 
-SCHEMES_DIR = os.getenv("SCHEMES_DIR", "./uploads/question_papers")
+QUESTION_DIR = "./uploads/question_papers"
+SCHEME_DIR = "./uploads/marking_schemes"
+SUBMISSIONS_DIR = "./uploads/submissions"
+FEEDBACK_DIR = "./uploads/feedbacks"
 
-
-@router.post("/", response_model=schemas.MarkResponse, status_code=status.HTTP_201_CREATED)
-def add_student_mark(payload: schemas.MarkCreate, db: Session = Depends(get_db)):
-    student_exists = db.query(models.Student).filter(models.Student.id == payload.student_id).first()
-    if not student_exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected student registry entry not found.")
-        
-    exam_exists = db.query(models.Exam).filter(models.Exam.id == payload.exam_id).first()
-    if not exam_exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected exam model registry entry not found.")
-
-    db_mark = models.EvaluationMark(
-        student_id=payload.student_id,
-        exam_id=payload.exam_id,
-        marks=payload.marks
-    )
-    db.add(db_mark)
-    db.commit()
-    db.refresh(db_mark)
-    return db_mark
-
-
-@router.get("/student/{student_id}")
-def get_all_marks_for_student(
-    student_id: int, 
-    db: Session = Depends(get_db),
-    current_student: models.Student = Depends(get_current_student)
-):
-    results = (
-        db.query(models.EvaluationMark, models.Exam.paper_number)
-        .join(models.Exam, models.EvaluationMark.exam_id == models.Exam.id)
-        .filter(models.EvaluationMark.student_id == student_id)
-        .all()
-    )
-
-    serialized_history = []
-    for mark, paper_number in results:
-        serialized_history.append({
-            "id": mark.id,
-            "student_id": mark.student_id,
-            "exam_id": mark.exam_id,
-            "paper_number": paper_number,
-            "marks": mark.marks,
-            "created_at": mark.created_at.isoformat() if mark.created_at else None
-        })
-    return serialized_history
+for path in [QUESTION_DIR, SCHEME_DIR, SUBMISSIONS_DIR, FEEDBACK_DIR]:
+    os.makedirs(path, exist_ok=True)
 
 
 @router.get("/past-papers")
@@ -66,7 +27,6 @@ def get_past_papers(
 ):
     from app.main.routers.exams import get_biweekly_schedule_state
     is_live, current_hq_num = get_biweekly_schedule_state(db)
-    
     max_archived_hq = current_hq_num - 1
     
     all_exams = db.query(models.Exam).all()
@@ -80,44 +40,147 @@ def get_past_papers(
         except ValueError:
             past_exams.append(exam)
             
-    return sorted(past_exams, key=lambda x: x.paper_number)
+    sorted_exams = sorted(past_exams, key=lambda x: x.paper_number)
+    
+    response_payload = []
+    for exam in sorted_exams:
+        scheme_exists = os.path.exists(exam.marking_scheme_path) if exam.marking_scheme_path else False
+        
+        matching_mark = db.query(models.EvaluationMark).filter(
+            models.EvaluationMark.student_id == current_student.id,
+            models.EvaluationMark.exam_id == exam.id
+        ).first()
+
+        response_payload.append({
+            "id": exam.id,
+            "paper_number": exam.paper_number,
+            "title": exam.title,
+            "paper_type": exam.paper_type,
+            "scheme_available": scheme_exists,
+            "marks": matching_mark.marks if matching_mark else None
+        })
+    return response_payload
 
 
-@router.get("/stream-scheme/{exam_id}")
-def download_marking_scheme(
-    exam_id: int, 
-    db: Session = Depends(get_db),
-    current_student: models.Student = Depends(get_current_student)
+@router.post("/admin/upload-exam")
+async def admin_upload_new_exam(
+    paper_number: str = Form(...),
+    title: str = Form(...),
+    paper_type: str = Form(...),
+    question_file: UploadFile = File(None),         
+    marking_scheme_file: UploadFile = File(None),   
+    db: Session = Depends(get_db)
 ):
-    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
-    if not exam or not exam.marking_scheme_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target marking scheme record or file path not found.")
+    prefix = paper_number.lower().replace(" ", "")
+    exam = db.query(models.Exam).filter(models.Exam.paper_number == paper_number).first()
     
-    graded_mark_exists = db.query(models.EvaluationMark).filter(
-        models.EvaluationMark.student_id == current_student.id,
-        models.EvaluationMark.exam_id == exam_id
-    ).first()
-
-    if not graded_mark_exists:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="🔒 Access Denied. The marking scheme for this paper remains locked because your submission has not been evaluated yet."
+    if not exam:
+        exam = models.Exam(
+            paper_number=paper_number,
+            title=title,
+            paper_type=paper_type,
+            question_file_path="",  
+            marking_scheme_path="", 
+            created_at=datetime.now()
         )
-    
-    db_filename = os.path.basename(exam.marking_scheme_path)
-    
-    def normalize_string(name: str) -> str:
-        return name.lower().replace(" ", "").replace("_", "").replace("-", "")
+        db.add(exam)
+        db.flush()  
 
-    target_normalized = normalize_string(db_filename)
+    if question_file and question_file.filename:
+        q_filename = f"{prefix}_question_{question_file.filename}"
+        q_path = os.path.join(QUESTION_DIR, q_filename)
+        with open(q_path, "wb") as f:
+            shutil.copyfileobj(question_file.file, f)
+        exam.question_file_path = q_path
 
-    if os.path.exists(SCHEMES_DIR):
-        for actual_file in os.listdir(SCHEMES_DIR):
-            if normalize_string(actual_file) == target_normalized:
-                return FileResponse(
-                    os.path.join(SCHEMES_DIR, actual_file),
-                    media_type="application/pdf",
-                    filename=actual_file
-                )
+    if marking_scheme_file and marking_scheme_file.filename:
+        m_filename = f"{prefix}_scheme_{marking_scheme_file.filename}"
+        m_path = os.path.join(SCHEME_DIR, m_filename)
+        with open(m_path, "wb") as f:
+            shutil.copyfileobj(marking_scheme_file.file, f)
+        exam.marking_scheme_path = m_path
+
+    exam.title = title
+    exam.paper_type = paper_type
+
+    db.commit()
+    return {"message": f"Successfully updated and processed assets for {paper_number}."}
+
+
+@router.get("/admin/pending-submissions")
+def admin_get_pending_submissions(db: Session = Depends(get_db)):
+    pending_list = []
+    latest_exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
+    if not latest_exam:
+        return []
+
+    for filename in os.listdir(SUBMISSIONS_DIR):
+        if filename.startswith("sub_stu_") and filename.endswith(".pdf"):
+            try:
+                student_id = int(filename.replace("sub_stu_", "").replace(".pdf", ""))
+                student = db.query(models.Student).filter(models.Student.id == student_id).first()
+                
+                already_marked = db.query(models.EvaluationMark).filter(
+                    models.EvaluationMark.student_id == student_id,
+                    models.EvaluationMark.exam_id == latest_exam.id
+                ).first()
+
+                if not already_marked and student:
+                    pending_list.append({
+                        "submission_id": student_id,
+                        "student_id": student_id,
+                        "student_name": student.name,
+                        "exam_id": latest_exam.id,
+                        "paper_number": latest_exam.paper_number
+                    })
+            except ValueError:
+                continue
+    return pending_list
+
+
+@router.post("/admin/submit-review")
+async def admin_upload_feedback_and_mark(
+    student_id: int = Form(...),
+    exam_id: int = Form(...),
+    marks: float = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    feedback_filename = f"feedback_stu_{student_id}.pdf"
+    saved_file_path = os.path.join(FEEDBACK_DIR, feedback_filename)
     
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Physical marking scheme PDF asset wasn't found on server storage.")
+    with open(saved_file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    db_mark = models.EvaluationMark(
+        student_id=student_id, 
+        exam_id=exam_id, 
+        marks=marks, 
+        created_at=datetime.now()
+    )
+    db.add(db_mark)
+    db.commit()
+    return {"message": "Mark successfully processed and feedback file cataloged."}
+
+
+@router.get("/admin/gradebook")
+def admin_get_gradebook_matrix(db: Session = Depends(get_db)):
+    results = db.query(
+        models.EvaluationMark.marks,
+        models.EvaluationMark.created_at,
+        models.Student.name.label("student_name"),
+        models.Exam.paper_number,
+        models.Exam.title.label("paper_title")
+    ).join(models.Student, models.Student.id == models.EvaluationMark.student_id)\
+     .join(models.Exam, models.Exam.id == models.EvaluationMark.exam_id)\
+     .order_by(models.EvaluationMark.created_at.desc()).all()
+     
+    return [
+        {
+            "student_name": r.student_name,
+            "paper_number": r.paper_number,
+            "paper_title": r.paper_title,
+            "marks": r.marks,
+            "graded_at": r.created_at.strftime("%Y-%m-%d %H:%M")
+        } for r in results
+    ]
