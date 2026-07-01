@@ -65,6 +65,7 @@ class EvaluationMark(Base):
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
     exam_id = Column(Integer, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
     marks = Column(Float, nullable=False)
+    feedback_file_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     student = relationship("Student", back_populates="marks")

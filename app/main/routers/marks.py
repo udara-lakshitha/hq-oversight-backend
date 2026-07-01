@@ -20,6 +20,40 @@ FEEDBACK_DIR = "./uploads/feedbacks"
 for path in [QUESTION_DIR, SCHEME_DIR, SUBMISSIONS_DIR, FEEDBACK_DIR]:
     os.makedirs(path, exist_ok=True)
 
+@router.get("/student/{student_id}")
+def get_student_marks_history(student_id: int, db: Session = Depends(get_db)):
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found.")
+
+    records = db.query(
+        models.EvaluationMark.marks,
+        models.EvaluationMark.feedback_file_path,
+        models.EvaluationMark.created_at,
+        models.Exam.paper_number,
+        models.Exam.title.label("exam_title")
+    ).join(
+        models.Exam, models.EvaluationMark.exam_id == models.Exam.id
+    ).filter(
+        models.EvaluationMark.student_id == student_id
+    ).order_by(
+        models.EvaluationMark.created_at.asc()
+    ).all()
+
+    history_list = []
+    for r in records:
+        filename = os.path.basename(r.feedback_file_path) if r.feedback_file_path else None
+        
+        history_list.append({
+            "paper_number": r.paper_number,
+            "title": r.exam_title,
+            "marks": r.marks,
+            "filename": filename,
+            "date": r.created_at.strftime("%Y-%m-%d")
+        })
+
+    return history_list
+
 
 @router.get("/past-papers")
 def get_past_papers(
@@ -115,61 +149,93 @@ async def admin_upload_new_exam(
     db.commit()
     return {"message": f"Successfully updated and processed assets for {paper_number}."}
 
-
 @router.get("/admin/pending-submissions")
 def admin_get_pending_submissions(db: Session = Depends(get_db)):
     pending_list = []
-    latest_exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
-    if not latest_exam:
+    if not os.path.exists(SUBMISSIONS_DIR):
         return []
 
     for filename in os.listdir(SUBMISSIONS_DIR):
-        if filename.startswith("sub_stu_") and filename.endswith(".pdf"):
+        if filename.startswith("student_") and filename.endswith(".pdf"):
             try:
-                student_id = int(filename.replace("sub_stu_", "").replace(".pdf", ""))
-                student = db.query(models.Student).filter(models.Student.id == student_id).first()
+                clean_name = filename.replace(".pdf", "")
+                parts = clean_name.split("_")
                 
-                already_marked = db.query(models.EvaluationMark).filter(
-                    models.EvaluationMark.student_id == student_id,
-                    models.EvaluationMark.exam_id == latest_exam.id
-                ).first()
+                student_id = int(parts[1])
+                exam_id = int(parts[3])
+                
+                student = db.query(models.Student).filter(models.Student.id == student_id).first()
+                exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+                
+                if student and exam:
+                    already_marked = db.query(models.EvaluationMark).filter(
+                        models.EvaluationMark.student_id == student_id,
+                        models.EvaluationMark.exam_id == exam_id
+                    ).first()
 
-                if not already_marked and student:
-                    pending_list.append({
-                        "submission_id": student_id,
-                        "student_id": student_id,
-                        "student_name": student.name,
-                        "exam_id": latest_exam.id,
-                        "paper_number": latest_exam.paper_number
-                    })
-            except ValueError:
+                    if not already_marked:
+                        pending_list.append({
+                            "submission_id": f"{student_id}_{exam_id}",
+                            "student_id": student_id,
+                            "student_name": student.name,
+                            "exam_id": exam_id,
+                            "paper_number": exam.paper_number,
+                            "filename": filename
+                        })
+            except (ValueError, IndexError):
                 continue
+                
     return pending_list
 
+@router.get("/admin/download-submission/{filename}")
+def admin_download_student_submission(filename: str):
+    file_path = os.path.join(SUBMISSIONS_DIR, filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Requested file path does not exist on disk.")
+        
+    return FileResponse(
+        path=file_path, 
+        media_type='application/pdf', 
+        filename=filename
+    )
 
-@router.post("/admin/submit-review")
-async def admin_upload_feedback_and_mark(
+
+@router.post("/admin/submit-evaluation")
+async def admin_submit_evaluation(
     student_id: int = Form(...),
     exam_id: int = Form(...),
     marks: float = Form(...),
-    file: UploadFile = File(...),
+    feedback_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    feedback_filename = f"feedback_stu_{student_id}.pdf"
-    saved_file_path = os.path.join(FEEDBACK_DIR, feedback_filename)
+    os.makedirs(FEEDBACK_DIR, exist_ok=True)
     
-    with open(saved_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    feedback_filename = f"feedback_stu_{student_id}_exam_{exam_id}.pdf"
+    feedback_path = os.path.join(FEEDBACK_DIR, feedback_filename)
+    
+    with open(feedback_path, "wb") as buffer:
+        buffer.write(await feedback_file.read())
         
-    db_mark = models.EvaluationMark(
-        student_id=student_id, 
-        exam_id=exam_id, 
-        marks=marks, 
-        created_at=datetime.now()
-    )
-    db.add(db_mark)
+    evaluation = db.query(models.EvaluationMark).filter(
+        models.EvaluationMark.student_id == student_id,
+        models.EvaluationMark.exam_id == exam_id
+    ).first()
+    
+    if evaluation:
+        evaluation.marks = marks
+        evaluation.feedback_file_path = feedback_path
+    else:
+        new_mark = models.EvaluationMark(
+            student_id=student_id,
+            exam_id=exam_id,
+            marks=marks,
+            feedback_file_path=feedback_path
+        )
+        db.add(new_mark)
+        
     db.commit()
-    return {"message": "Mark successfully processed and feedback file cataloged."}
+    return {"status": "success", "message": "Evaluation record stored successfully."}
 
 
 @router.get("/admin/gradebook")
@@ -193,3 +259,19 @@ def admin_get_gradebook_matrix(db: Session = Depends(get_db)):
             "graded_at": r.created_at.strftime("%Y-%m-%d %H:%M")
         } for r in results
     ]
+
+@router.get("/admin/download-submission/{filename}")
+def admin_download_student_submission(filename: str):
+    file_path = os.path.join(SUBMISSIONS_DIR, filename)
+    
+    if not os.path.abspath(file_path).startswith(os.path.abspath(SUBMISSIONS_DIR)):
+        raise HTTPException(status_code=400, detail="Unauthorized system tree navigation.")
+        
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Requested answer matrix file no longer exists in storage registry.")
+        
+    return FileResponse(
+        path=file_path, 
+        media_type='application/pdf', 
+        filename=filename
+    )
