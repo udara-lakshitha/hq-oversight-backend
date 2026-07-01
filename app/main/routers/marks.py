@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.main.database import get_db
 from app.main import models, schemas
 from app.main.routers.auth import get_current_student
+from app.main.routers.exams import get_biweekly_schedule_state
 
 router = APIRouter(prefix="/api/marks", tags=["Evaluation Marks Engine"])
 
@@ -25,10 +26,7 @@ def get_past_papers(
     db: Session = Depends(get_db),
     current_student: models.Student = Depends(get_current_student)
 ):
-    from app.main.routers.exams import get_biweekly_schedule_state
-    is_live, current_hq_num = get_biweekly_schedule_state(db)
-    
-    max_archived_hq = current_hq_num
+    is_live, current_hq_num, matched_weekday = get_biweekly_schedule_state(db)
     
     all_exams = db.query(models.Exam).all()
     past_exams = []
@@ -36,17 +34,22 @@ def get_past_papers(
     for exam in all_exams:
         try:
             num = int(exam.paper_number.upper().replace("HQ", "").strip())
-            if num <= max_archived_hq:
-                past_exams.append(exam)
-        except ValueError:
-            past_exams.append(exam)
             
-    sorted_exams = sorted(past_exams, key=lambda x: x.paper_number)
+            if is_live and num >= current_hq_num:
+                continue
+            
+            if num < current_hq_num:
+                past_exams.append(exam)
+                
+        except ValueError:
+            if not is_live:
+                past_exams.append(exam)
+            
+    sorted_exams = sorted(past_exams, key=lambda x: x.id, reverse=True)
     
     response_payload = []
     for exam in sorted_exams:
         scheme_exists = os.path.exists(exam.marking_scheme_path) if exam.marking_scheme_path else False
-        
         feedback_filename = f"feedback_stu_{current_student.id}.pdf"
         feedback_exists = os.path.exists(os.path.join("./uploads/feedbacks", feedback_filename))
         
@@ -59,7 +62,7 @@ def get_past_papers(
             "id": exam.id,
             "paper_number": exam.paper_number,
             "title": exam.title,
-            "paper_type": exam.paper_type,
+            "paper_type": exam.paper_type if exam.paper_type else "Pure Maths",
             "scheme_available": scheme_exists,
             "feedback_available": feedback_exists,
             "marks": matching_mark.marks if matching_mark else None

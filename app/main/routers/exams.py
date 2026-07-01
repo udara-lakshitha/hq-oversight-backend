@@ -46,17 +46,21 @@ def verify_active_device_session(student_id: int, device_token: str, db: Session
 def get_biweekly_schedule_state(db: Session):
     now = datetime.now()
     is_live = False
+    matched_weekday = None
 
     for weekday in CLASS_WEEKDAYS:
         start_datetime = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0)
         if now.weekday() != weekday:
-            start_datetime -= timedelta(days=1)
+            days_back = (now.weekday() - weekday) % 7
+            start_datetime -= timedelta(days=days_back)
             
         if start_datetime.weekday() == weekday:
             end_datetime = start_datetime + timedelta(hours=DURATION_HOURS, minutes=DURATION_MINUTES)
             if start_datetime <= now <= end_datetime:
-                is_live = True
-                break
+                if now.date() == start_datetime.date():
+                    is_live = True
+                    matched_weekday = weekday
+                    break
 
     latest_exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
     
@@ -74,10 +78,10 @@ def get_biweekly_schedule_state(db: Session):
     else:
         target_hq_num = max_num + 1
 
-    return is_live, target_hq_num
+    return is_live, target_hq_num, matched_weekday
 
 
-@router.get("/live-session", response_model=schemas.ExamResponse)
+@router.get("/live-session")
 def get_active_live_session(
     db: Session = Depends(get_db),
     current_student: models.Student = Depends(get_current_student),
@@ -85,32 +89,46 @@ def get_active_live_session(
 ):
     verify_active_device_session(current_student.id, x_device_token, db)
 
-    if MOCK_LIVE_MODE:
-        exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
-        if not exam:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="Dynamic Live Override active, but your database Exam table is completely empty."
-            )
-        return exam
-
-    is_live, target_hq_num = get_biweekly_schedule_state(db)
+    is_live, target_hq_num, matched_weekday = get_biweekly_schedule_state(db)
     target_paper_code = f"HQ {target_hq_num}"
 
-    if not is_live and not DEVELOPMENT_MODE:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"System locked. {target_paper_code} is scheduled for the upcoming window."
-        )
+    now = datetime.now()
+    seconds_remaining = 0
+
+    if is_live:
+        start_datetime = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0)
+        if now.weekday() != matched_weekday:
+            days_back = (now.weekday() - matched_weekday) % 7
+            start_datetime -= timedelta(days=days_back)
+            
+        end_datetime = start_datetime + timedelta(hours=DURATION_HOURS, minutes=DURATION_MINUTES)
+        seconds_remaining = max(0, int((end_datetime - now).total_seconds()))
+    else:
+        upcoming_targets = []
+        for weekday in CLASS_WEEKDAYS:
+            days_ahead = (weekday - now.weekday()) % 7
+            if days_ahead == 0:
+                past_end = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0) + timedelta(hours=DURATION_HOURS, minutes=DURATION_MINUTES)
+                if now > past_end:
+                    days_ahead = 7
+            target_start = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0) + timedelta(days=days_ahead)
+            upcoming_targets.append(target_start)
+            
+        next_class_start = min(upcoming_targets)
+        seconds_remaining = max(0, int((next_class_start - now).total_seconds()))
 
     exam = db.query(models.Exam).filter(models.Exam.paper_number == target_paper_code).first()
-    if not exam:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Active slot open, but question asset registry profile is blank."
-        )
-        
-    return exam
+
+    if is_live and not exam:
+        exam = db.query(models.Exam).order_by(models.Exam.id.desc()).first()
+
+    return {
+        "is_live": is_live,
+        "seconds_remaining": seconds_remaining,
+        "target_hq_num": target_hq_num,
+        "target_paper_code": target_paper_code,
+        "exam": exam if is_live else None
+    }
 
 
 @router.get("/stream-paper/{exam_id}")
@@ -154,7 +172,6 @@ def stream_exam_file_pdf(
         )
         
     return FileResponse(absolute_target_path, media_type="application/pdf", filename=download_name)
-
 
 @router.post("/submit-live/{exam_id}")
 async def receive_student_answer_payload(
