@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.main.database import Base
@@ -13,6 +13,7 @@ class Student(Base):
     hashed_password = Column(String, nullable=False)
     profile_pic_path = Column(String, nullable=True)
     role = Column(String)
+    is_temporary_password = Column(Boolean, default=False, server_default="false")
 
     devices = relationship("StudentDevice", back_populates="student", cascade="all, delete-orphan")
     marks = relationship("EvaluationMark", back_populates="student", cascade="all, delete-orphan")

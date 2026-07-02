@@ -45,3 +45,36 @@ def send_verification_email(student_name: str, target_email: str, otp_code: str)
     print(f" Your Combined Math panel security access code is: [ {otp_code} ]")
     print(" This passcode will expire in 5 minutes.")
     print("="*69 + "\n")
+
+def send_recovery_email(student_name: str, target_email: str, temporary_password: str):
+    try:
+        template = jinja_env.get_template("reset_password_email.html")
+        html_content = template.render(student_name=student_name, temporary_password=temporary_password)
+    except Exception as e:
+        print(f"❌ Template Rendering failure error: {str(e)}")
+        return
+
+    if RESEND_API_KEY and RESEND_API_KEY != "re_mock_key_for_local_development":
+        try:
+            resend.api_key = RESEND_API_KEY
+            params = {
+                "from": "HQ-Oversight Engine <onboarding@resend.dev>",
+                "to": [target_email],
+                "subject": "🔑 Temporary Password Recovery - HQ-Oversight Portal",
+                "html": html_content
+            }
+            resend.Emails.send(params)
+            print(f"📧 Production Email successfully routed through Resend API to {target_email}!")
+            return
+        except Exception as e:
+            print(f"❌ Resend transmission ERROR encountered: {str(e)}")
+
+    print("\n" + "📨 " + "="*65)
+    print("📢 PRODUCTION EMAIL SIMULATOR (HTML DESIGN CAPTURED)")
+    print(f"TARGET EMAIL : {target_email}")
+    print(f"SUBJECT      : 🔑 Temporary Password Recovery - HQ-Oversight Portal")
+    print("-" * 69)
+    print(f" Ayubowan {student_name}!")
+    print(f" Your temporary security passkey password is: [ {temporary_password} ]")
+    print(" Please change this password immediately after access log initialization.")
+    print("="*69 + "\n")

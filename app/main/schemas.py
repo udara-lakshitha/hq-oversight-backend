@@ -74,3 +74,8 @@ class MarkResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PasswordUpdatePayload(BaseModel):
+    email: str
+    new_password: str
+    confirm_password: str
