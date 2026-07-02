@@ -148,12 +148,31 @@ def stream_exam_file_pdf(
             detail="Requested exam record missing from database storage."
         )
     
+    evaluation = None
+    if file_type in ["scheme", "feedback"]:
+        evaluation = db.query(models.EvaluationMark).filter(
+            models.EvaluationMark.student_id == current_student.id,
+            models.EvaluationMark.exam_id == exam_id
+        ).first()
+
     if file_type == "scheme":
+        if not evaluation:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="Access Denied. Marking scheme unlocks after your script is evaluated."
+            )
         file_path = exam.marking_scheme_path
         download_name = f"Exam_{exam_id}_Marking_Scheme.pdf"
+        
     elif file_type == "feedback":
-        file_path = exam.feedback_file_path
+        if not evaluation or not evaluation.feedback_file_path:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="No graded feedback sheet available for your submission yet."
+            )
+        file_path = evaluation.feedback_file_path
         download_name = f"Exam_{exam_id}_Feedback.pdf"
+        
     else:
         file_path = exam.question_file_path
         download_name = f"Exam_{exam_id}_Questions.pdf"
