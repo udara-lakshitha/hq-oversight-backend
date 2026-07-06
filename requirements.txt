@@ -25,3 +25,5 @@ python-dotenv==1.0.1
 jinja2
 resend
 supabase
+passlib[bcrypt]
+python-jose[cryptography]
