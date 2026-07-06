@@ -1,24 +1,18 @@
 import os
-import shutil
+import secrets
+import io
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.main.database import get_db
 from app.main import models, schemas
 from app.main.routers.auth import get_current_student
 from app.main.routers.exams import get_biweekly_schedule_state
+from app.utils.storage import upload_file_to_supabase, get_file_from_supabase
 
 router = APIRouter(prefix="/api/marks", tags=["Evaluation Marks Engine"])
-
-QUESTION_DIR = "./uploads/question_papers"
-SCHEME_DIR = "./uploads/marking_schemes"
-SUBMISSIONS_DIR = "./uploads/submissions"
-FEEDBACK_DIR = "./uploads/feedbacks"
-
-for path in [QUESTION_DIR, SCHEME_DIR, SUBMISSIONS_DIR, FEEDBACK_DIR]:
-    os.makedirs(path, exist_ok=True)
 
 @router.get("/student/{student_id}")
 def get_student_marks_history(student_id: int, db: Session = Depends(get_db)):
@@ -83,14 +77,14 @@ def get_past_papers(
     
     response_payload = []
     for exam in sorted_exams:
-        scheme_exists = os.path.exists(exam.marking_scheme_path) if exam.marking_scheme_path else False
-        feedback_filename = f"feedback_stu_{current_student.id}.pdf"
-        feedback_exists = os.path.exists(os.path.join("./uploads/feedbacks", feedback_filename))
+        scheme_exists = bool(exam.marking_scheme_path)
         
         matching_mark = db.query(models.EvaluationMark).filter(
             models.EvaluationMark.student_id == current_student.id,
             models.EvaluationMark.exam_id == exam.id
         ).first()
+        
+        feedback_exists = bool(matching_mark and matching_mark.feedback_file_path)
 
         response_payload.append({
             "id": exam.id,
@@ -130,18 +124,20 @@ async def admin_upload_new_exam(
         db.flush()  
 
     if question_file and question_file.filename:
-        q_filename = f"{prefix}_question_{question_file.filename}"
-        q_path = os.path.join(QUESTION_DIR, q_filename)
-        with open(q_path, "wb") as f:
-            shutil.copyfileobj(question_file.file, f)
-        exam.question_file_path = q_path
+        q_bytes = await question_file.read()
+        random_hex = secrets.token_hex(4)
+        q_filename = f"{prefix}_question_{random_hex}_{question_file.filename}"
+        
+        storage_path = upload_file_to_supabase(q_bytes, q_filename, folder="questions")
+        exam.question_file_path = storage_path
 
     if marking_scheme_file and marking_scheme_file.filename:
-        m_filename = f"{prefix}_scheme_{marking_scheme_file.filename}"
-        m_path = os.path.join(SCHEME_DIR, m_filename)
-        with open(m_path, "wb") as f:
-            shutil.copyfileobj(marking_scheme_file.file, f)
-        exam.marking_scheme_path = m_path
+        m_bytes = await marking_scheme_file.read()
+        random_hex = secrets.token_hex(4)
+        m_filename = f"{prefix}_scheme_{random_hex}_{marking_scheme_file.filename}"
+        
+        storage_path = upload_file_to_supabase(m_bytes, m_filename, folder="schemes")
+        exam.marking_scheme_path = storage_path
 
     exam.title = title
     exam.paper_type = paper_type
@@ -149,56 +145,53 @@ async def admin_upload_new_exam(
     db.commit()
     return {"message": f"Successfully updated and processed assets for {paper_number}."}
 
+
 @router.get("/admin/pending-submissions")
 def admin_get_pending_submissions(db: Session = Depends(get_db)):
     pending_list = []
-    if not os.path.exists(SUBMISSIONS_DIR):
-        return []
+    submissions = db.query(models.ExamSubmission).all()
 
-    for filename in os.listdir(SUBMISSIONS_DIR):
-        if filename.startswith("student_") and filename.endswith(".pdf"):
-            try:
-                clean_name = filename.replace(".pdf", "")
-                parts = clean_name.split("_")
-                
-                student_id = int(parts[1])
-                exam_id = int(parts[3])
-                
-                student = db.query(models.Student).filter(models.Student.id == student_id).first()
-                exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
-                
-                if student and exam:
-                    already_marked = db.query(models.EvaluationMark).filter(
-                        models.EvaluationMark.student_id == student_id,
-                        models.EvaluationMark.exam_id == exam_id
-                    ).first()
+    for sub in submissions:
+        student = db.query(models.Student).filter(models.Student.id == sub.student_id).first()
+        exam = db.query(models.Exam).filter(models.Exam.id == sub.exam_id).first()
+        
+        if student and exam:
+            already_marked = db.query(models.EvaluationMark).filter(
+                models.EvaluationMark.student_id == sub.student_id,
+                models.EvaluationMark.exam_id == sub.exam_id
+            ).first()
 
-                    if not already_marked:
-                        pending_list.append({
-                            "submission_id": f"{student_id}_{exam_id}",
-                            "student_id": student_id,
-                            "student_name": student.name,
-                            "exam_id": exam_id,
-                            "paper_number": exam.paper_number,
-                            "filename": filename
-                        })
-            except (ValueError, IndexError):
-                continue
+            if not already_marked:
+                filename = os.path.basename(sub.submitted_file_path)
+                pending_list.append({
+                    "submission_id": f"{sub.student_id}_{sub.exam_id}",
+                    "student_id": sub.student_id,
+                    "student_name": student.name,
+                    "exam_id": sub.exam_id,
+                    "paper_number": exam.paper_number,
+                    "filename": filename
+                })
                 
     return pending_list
 
 @router.get("/admin/download-submission/{filename}")
-def admin_download_student_submission(filename: str):
-    file_path = os.path.join(SUBMISSIONS_DIR, filename)
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Requested file path does not exist on disk.")
+def admin_download_student_submission(filename: str, db: Session = Depends(get_db)):
+    submission = db.query(models.ExamSubmission).filter(
+        models.ExamSubmission.submitted_file_path.like(f"%{filename}")
+    ).first()
+
+    if not submission or not submission.submitted_file_path:
+        raise HTTPException(status_code=404, detail="Requested answer matrix file no longer exists in storage registry.")
         
-    return FileResponse(
-        path=file_path, 
-        media_type='application/pdf', 
-        filename=filename
-    )
+    try:
+        file_bytes = get_file_from_supabase(submission.submitted_file_path)
+        return StreamingResponse(
+            io.BytesIO(file_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename={filename}"}
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Requested file path does not exist in Cloud Storage arrays.")
 
 
 @router.post("/admin/submit-evaluation")
@@ -209,13 +202,10 @@ async def admin_submit_evaluation(
     feedback_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    os.makedirs(FEEDBACK_DIR, exist_ok=True)
-    
-    feedback_filename = f"feedback_stu_{student_id}_exam_{exam_id}.pdf"
-    feedback_path = os.path.join(FEEDBACK_DIR, feedback_filename)
-    
-    with open(feedback_path, "wb") as buffer:
-        buffer.write(await feedback_file.read())
+    f_bytes = await feedback_file.read()
+    random_hex = secrets.token_hex(4)
+    feedback_filename = f"feedback_stu_{student_id}_exam_{exam_id}_{random_hex}.pdf"
+    storage_path = upload_file_to_supabase(f_bytes, feedback_filename, folder="feedback")
         
     evaluation = db.query(models.EvaluationMark).filter(
         models.EvaluationMark.student_id == student_id,
@@ -224,13 +214,13 @@ async def admin_submit_evaluation(
     
     if evaluation:
         evaluation.marks = marks
-        evaluation.feedback_file_path = feedback_path
+        evaluation.feedback_file_path = storage_path
     else:
         new_mark = models.EvaluationMark(
             student_id=student_id,
             exam_id=exam_id,
             marks=marks,
-            feedback_file_path=feedback_path
+            feedback_file_path=storage_path
         )
         db.add(new_mark)
         
@@ -259,19 +249,3 @@ def admin_get_gradebook_matrix(db: Session = Depends(get_db)):
             "graded_at": r.created_at.strftime("%Y-%m-%d %H:%M")
         } for r in results
     ]
-
-@router.get("/admin/download-submission/{filename}")
-def admin_download_student_submission(filename: str):
-    file_path = os.path.join(SUBMISSIONS_DIR, filename)
-    
-    if not os.path.abspath(file_path).startswith(os.path.abspath(SUBMISSIONS_DIR)):
-        raise HTTPException(status_code=400, detail="Unauthorized system tree navigation.")
-        
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Requested answer matrix file no longer exists in storage registry.")
-        
-    return FileResponse(
-        path=file_path, 
-        media_type='application/pdf', 
-        filename=filename
-    )

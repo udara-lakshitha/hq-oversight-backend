@@ -1,20 +1,19 @@
 import os
-import shutil
+import io
 from datetime import datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.main.database import get_db
-from app.main import models, schemas
+from app.main import models
 from app.main.routers.auth import get_current_student
+from app.utils.storage import upload_file_to_supabase, get_file_from_supabase
 
 router = APIRouter(prefix="/api/exams", tags=["Synchronized Examination Stream"])
 
 DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "False").lower() in ("true", "1", "yes")
 MOCK_LIVE_MODE = os.getenv("MOCK_LIVE_MODE", "False").lower() in ("true", "1", "yes")
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads/submissions")
-PAPERS_DIR = os.getenv("PAPERS_DIR", "./uploads/question_papers")
 
 raw_weekdays = os.getenv("CLASS_WEEKDAYS", "1,4")
 CLASS_WEEKDAYS = [int(d.strip()) for d in raw_weekdays.split(",") if d.strip()]
@@ -183,14 +182,20 @@ def stream_exam_file_pdf(
             detail=f"Requested asset file type path [{file_type}] trace missing from database record."
         )
         
-    absolute_target_path = os.path.abspath(file_path)
-    if not os.path.exists(absolute_target_path):
+    try:
+        file_bytes = get_file_from_supabase(file_path)
+        
+        return StreamingResponse(
+            io.BytesIO(file_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename={download_name}"}
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Physical PDF binary payload not present on disk array storage units."
+            detail="Target binary object not found inside Supabase cloud storage bucket storage arrays."
         )
-        
-    return FileResponse(absolute_target_path, media_type="application/pdf", filename=download_name)
+
 
 @router.post("/submit-live/{exam_id}")
 async def receive_student_answer_payload(
@@ -208,25 +213,21 @@ async def receive_student_answer_payload(
             detail="Transmission rejected: Document matrix payloads must be strictly in PDF formatting profiles."
         )
 
-    if not os.path.exists(UPLOAD_DIR):
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-
+    file_bytes = await file.read()
     sanitized_filename = f"student_{current_student.id}_exam_{exam_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    destination_file_path = os.path.join(UPLOAD_DIR, sanitized_filename)
 
     try:
-        with open(destination_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        storage_path = upload_file_to_supabase(file_bytes, sanitized_filename, folder="student_submissions")
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Disk writer configuration failed: {str(err)}"
+            detail=f"Supabase upload configuration failed: {str(err)}"
         )
 
     new_submission = models.ExamSubmission(
         student_id=current_student.id,
         exam_id=exam_id,
-        submitted_file_path=destination_file_path,
+        submitted_file_path=storage_path,
         submitted_at=datetime.now()
     )
     db.add(new_submission)
