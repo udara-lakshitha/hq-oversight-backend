@@ -15,10 +15,8 @@ COPY requirements.txt /
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /requirements.txt
 
-RUN pip install --no-cache-dir jinja2 passlib[bcrypt] python-jose[cryptography]
-
 COPY . /
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["python", "-m", "app.main.main"]
