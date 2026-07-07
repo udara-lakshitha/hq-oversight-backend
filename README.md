@@ -82,5 +82,5 @@ RESEND_API_KEY=re_your_resend_smtp_integration_token
 
 ### 5. Fire up the high-performance local server:
 ```bash
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 
 ```
