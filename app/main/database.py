@@ -10,14 +10,12 @@ load_dotenv(dotenv_path=env_path)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=5,
-    max_overflow=10,
-    pool_recycle=1800,
-    pool_pre_ping=True,
-    connect_args={"sslmode": "require"} if "neon.tech" in DATABASE_URL else {}
-)
+if DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.strip("'\"")
+else:
+    DATABASE_URL = "postgresql://localhost/postgres"
+
+engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
